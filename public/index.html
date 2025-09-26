@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiFi Firewall Control Panel</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>WiFi Firewall Control Panel</h1>
+            <div class="status" id="status">
+                <span class="status-indicator"></span>
+                <span>Active</span>
+            </div>
+        </header>
+
+        <div class="mode-selector">
+            <h3>Firewall Mode</h3>
+            <div class="mode-buttons">
+                <button id="blacklist-mode" class="mode-btn active">Blacklist Mode</button>
+                <button id="whitelist-mode" class="mode-btn">Whitelist Mode</button>
+            </div>
+            <p class="mode-description" id="mode-description">
+                Block specific websites while allowing everything else
+            </p>
+        </div>
+
+        <div class="categories">
+            <h3>Quick Block Categories</h3>
+            <div class="category-grid">
+                <div class="category-item" data-category="social">
+                    <input type="checkbox" id="cat-social">
+                    <label for="cat-social">Social Media</label>
+                </div>
+                <div class="category-item" data-category="streaming">
+                    <input type="checkbox" id="cat-streaming">
+                    <label for="cat-streaming">Streaming</label>
+                </div>
+                <div class="category-item" data-category="gaming">
+                    <input type="checkbox" id="cat-gaming">
+                    <label for="cat-gaming">Gaming</label>
+                </div>
+                <div class="category-item" data-category="ads">
+                    <input type="checkbox" id="cat-ads">
+                    <label for="cat-ads">Ads & Trackers</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="rules-section">
+            <div class="rule-input">
+                <h3>Add Custom Rule</h3>
+                <div class="input-group">
+                    <input type="text" id="domain-input" placeholder="example.com">
+                    <button id="block-btn" class="btn btn-danger">Block</button>
+                    <button id="allow-btn" class="btn btn-success">Allow</button>
+                </div>
+            </div>
+
+            <div class="test-domain">
+                <h3>Test Domain</h3>
+                <div class="input-group">
+                    <input type="text" id="test-input" placeholder="test.example.com">
+                    <button id="test-btn" class="btn">Test</button>
+                </div>
+                <div id="test-result"></div>
+            </div>
+        </div>
+
+        <div class="lists">
+            <div class="list-container">
+                <h3>Blocked Sites</h3>
+                <ul id="blocked-list" class="domain-list"></ul>
+            </div>
+            <div class="list-container">
+                <h3>Allowed Sites</h3>
+                <ul id="allowed-list" class="domain-list"></ul>
+            </div>
+        </div>
+
+        <div class="logs">
+            <h3>Recent Activity</h3>
+            <div id="activity-log" class="log-container"></div>
+        </div>
+
+        <div class="instructions">
+            <h3>Setup Instructions</h3>
+            <ol>
+                <li>Configure your router or device DNS settings to: <code id="dns-ip">Your Server IP</code></li>
+                <li>Or set DNS manually on each device to this server's IP address</li>
+                <li>Changes take effect immediately</li>
+            </ol>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

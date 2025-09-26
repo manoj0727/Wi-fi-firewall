@@ -1,0 +1,23 @@
+{
+  "name": "wifi-firewall",
+  "version": "1.0.0",
+  "description": "High-speed WiFi firewall for controlling website access",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "install-service": "sudo node scripts/install-service.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dns2": "^2.1.0",
+    "redis": "^4.6.13",
+    "dotenv": "^16.4.5",
+    "body-parser": "^1.20.2",
+    "ip": "^1.1.8"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}
