@@ -1,6 +1,7 @@
 const redis = require('redis');
 const fs = require('fs').promises;
 const path = require('path');
+const database = require('./database');
 
 class RuleManager {
   constructor() {
@@ -19,8 +20,23 @@ class RuleManager {
     };
     this.cache = new Map();
     this.accessLog = [];
-    this.initRedis();
-    this.loadRules();
+    this.initServices();
+  }
+
+  async initServices() {
+    await this.initRedis();
+    await this.loadRules();
+
+    // Subscribe to real-time updates if Supabase is available
+    if (database.isInitialized()) {
+      database.subscribeToBlockedDomains(async (payload) => {
+        await this.syncFromDatabase();
+        this.clearCache();
+      });
+
+      // Initial sync with database
+      await this.syncFromDatabase();
+    }
   }
 
   async initRedis() {
@@ -32,8 +48,11 @@ class RuleManager {
         }
       });
 
-      this.redisClient.on('error', (err) => {
-        console.log('Redis error, falling back to memory cache:', err.message);
+      this.redisClient.on('error', () => {
+        if (!this.redisErrorLogged) {
+          console.log('Redis not available, using memory cache');
+          this.redisErrorLogged = true;
+        }
         this.redisClient = null;
       });
 
@@ -47,7 +66,50 @@ class RuleManager {
     }
   }
 
+  async syncFromDatabase() {
+    if (!database.isInitialized()) return;
+
+    try {
+      // Sync blocked domains
+      const blockedDomains = await database.getBlockedDomains();
+      this.rules.blocked = new Set(blockedDomains.map(d => d.domain));
+
+      // Sync allowed domains
+      const allowedDomains = await database.getAllowedDomains();
+      this.rules.allowed = new Set(allowedDomains.map(d => d.domain));
+
+      // Sync categories
+      const categories = await database.getCategories();
+      const enabledCategories = await database.getEnabledCategories();
+
+      categories.forEach(cat => {
+        if (cat.domains && cat.domains.length > 0) {
+          this.rules.categories[cat.name] = cat.domains;
+        }
+      });
+
+      this.rules.blockedCategories = new Set(enabledCategories.map(c => c.name));
+
+      // Sync mode setting
+      const mode = await database.getSetting('filter_mode');
+      if (mode) {
+        this.rules.mode = mode;
+      }
+
+      console.log('Synced rules from database');
+    } catch (error) {
+      console.error('Error syncing from database:', error);
+    }
+  }
+
   async loadRules() {
+    // First try to load from database
+    if (database.isInitialized()) {
+      await this.syncFromDatabase();
+      return;
+    }
+
+    // Fallback to file-based storage
     try {
       const rulesPath = path.join(__dirname, '../data/rules.json');
       const data = await fs.readFile(rulesPath, 'utf8');
@@ -62,6 +124,26 @@ class RuleManager {
   }
 
   async saveRules() {
+    // Save to database if available
+    if (database.isInitialized()) {
+      // Mode is saved through setSetting
+      await database.setSetting('filter_mode', this.rules.mode);
+
+      // Categories are managed through the database
+      for (const categoryName of this.rules.blockedCategories) {
+        if (this.rules.categories[categoryName]) {
+          await database.updateCategory(
+            categoryName,
+            this.rules.categories[categoryName],
+            true
+          );
+        }
+      }
+
+      return;
+    }
+
+    // Fallback to file-based storage
     const dataDir = path.join(__dirname, '../data');
     await fs.mkdir(dataDir, { recursive: true });
 
@@ -76,11 +158,16 @@ class RuleManager {
     await fs.writeFile(rulesPath, JSON.stringify(data, null, 2));
   }
 
-  async isBlocked(domain) {
+  async isBlocked(domain, ipAddress = null) {
     const cacheKey = `block:${domain}`;
 
     if (this.cache.has(cacheKey)) {
-      return this.cache.get(cacheKey);
+      const result = this.cache.get(cacheKey);
+      // Log to database if available
+      if (database.isInitialized()) {
+        await database.logAccess(domain, result ? 'blocked' : 'allowed', ipAddress);
+      }
+      return result;
     }
 
     if (this.redisClient) {
@@ -89,6 +176,9 @@ class RuleManager {
         if (cached !== null) {
           const result = cached === 'true';
           this.cache.set(cacheKey, result);
+          if (database.isInitialized()) {
+            await database.logAccess(domain, result ? 'blocked' : 'allowed', ipAddress);
+          }
           return result;
         }
       } catch (error) {
@@ -96,8 +186,19 @@ class RuleManager {
       }
     }
 
+    // Check database first if available
+    if (database.isInitialized()) {
+      const dbBlocked = await database.isDomainBlocked(domain);
+      if (dbBlocked) {
+        this.cache.set(cacheKey, true);
+        await database.logAccess(domain, 'blocked', ipAddress);
+        return true;
+      }
+    }
+
     let isBlocked = false;
 
+    // Check categories
     for (const category of this.rules.blockedCategories) {
       if (this.rules.categories[category]) {
         for (const site of this.rules.categories[category]) {
@@ -109,6 +210,7 @@ class RuleManager {
       }
     }
 
+    // Check blocked list
     if (!isBlocked) {
       for (const blockedDomain of this.rules.blocked) {
         if (domain.includes(blockedDomain)) {
@@ -118,6 +220,7 @@ class RuleManager {
       }
     }
 
+    // Check whitelist mode
     if (this.rules.mode === 'whitelist') {
       isBlocked = true;
       for (const allowedDomain of this.rules.allowed) {
@@ -142,19 +245,48 @@ class RuleManager {
       }
     }
 
+    // Log to database
+    if (database.isInitialized()) {
+      await database.logAccess(domain, isBlocked ? 'blocked' : 'allowed', ipAddress);
+    }
+
     return isBlocked;
   }
 
-  async addBlockedSite(domain) {
+  async addBlockedSite(domain, ipAddress = null) {
+    // Add to database if available
+    if (database.isInitialized()) {
+      const result = await database.addBlockedDomain(domain, null, ipAddress);
+      if (result.success) {
+        this.rules.blocked.add(domain);
+        this.clearCache();
+      }
+      return result;
+    }
+
+    // Fallback to local storage
     this.rules.blocked.add(domain);
     this.clearCache();
     await this.saveRules();
+    return { success: true };
   }
 
   async removeBlockedSite(domain) {
+    // Remove from database if available
+    if (database.isInitialized()) {
+      const result = await database.removeBlockedDomain(domain);
+      if (result.success) {
+        this.rules.blocked.delete(domain);
+        this.clearCache();
+      }
+      return result;
+    }
+
+    // Fallback to local storage
     this.rules.blocked.delete(domain);
     this.clearCache();
     await this.saveRules();
+    return { success: true };
   }
 
   async addAllowedSite(domain) {
@@ -172,8 +304,22 @@ class RuleManager {
   async toggleCategory(category) {
     if (this.rules.blockedCategories.has(category)) {
       this.rules.blockedCategories.delete(category);
+      if (database.isInitialized()) {
+        await database.updateCategory(
+          category,
+          this.rules.categories[category] || [],
+          false
+        );
+      }
     } else {
       this.rules.blockedCategories.add(category);
+      if (database.isInitialized()) {
+        await database.updateCategory(
+          category,
+          this.rules.categories[category] || [],
+          true
+        );
+      }
     }
     this.clearCache();
     await this.saveRules();
@@ -181,6 +327,9 @@ class RuleManager {
 
   async setMode(mode) {
     this.rules.mode = mode;
+    if (database.isInitialized()) {
+      await database.setSetting('filter_mode', mode);
+    }
     this.clearCache();
     await this.saveRules();
   }
@@ -196,22 +345,51 @@ class RuleManager {
     }
   }
 
-  async logAccess(domain, status) {
+  async logAccess(domain, status, ipAddress = null) {
     const entry = {
       domain,
       status,
       timestamp: new Date().toISOString(),
-      ip: null
+      ip: ipAddress
     };
 
     this.accessLog.push(entry);
     if (this.accessLog.length > 1000) {
       this.accessLog.shift();
     }
+
+    // Also log to database if available
+    if (database.isInitialized()) {
+      await database.logAccess(domain, status, ipAddress);
+    }
   }
 
-  getAccessLog() {
+  async getAccessLog() {
+    // Try to get from database first
+    if (database.isInitialized()) {
+      const logs = await database.getAccessLogs(100);
+      if (logs.length > 0) {
+        return logs;
+      }
+    }
+
+    // Fallback to in-memory log
     return this.accessLog.slice(-100).reverse();
+  }
+
+  async getStats() {
+    // Get stats from database if available
+    if (database.isInitialized()) {
+      return await database.getAccessStats(24);
+    }
+
+    // Calculate from in-memory log
+    const stats = {
+      total: this.accessLog.length,
+      blocked: this.accessLog.filter(l => l.status === 'blocked').length,
+      allowed: this.accessLog.filter(l => l.status === 'allowed').length
+    };
+    return stats;
   }
 
   getRules() {
@@ -220,9 +398,10 @@ class RuleManager {
       allowed: Array.from(this.rules.allowed),
       categories: this.rules.categories,
       blockedCategories: Array.from(this.rules.blockedCategories),
-      mode: this.rules.mode
+      mode: this.rules.mode,
+      databaseConnected: database.isInitialized()
     };
   }
 }
 
-module.exports = { RuleManager };
+module.exports = RuleManager;

@@ -1,0 +1,8 @@
+{
+  "blocked": [
+    "example.com"
+  ],
+  "allowed": [],
+  "blockedCategories": [],
+  "mode": "blacklist"
+}

@@ -1,8 +1,8 @@
-const DNS = require('dns2');
-const { Packet } = DNS;
+const dns2 = require('dns2');
+const { Packet } = dns2;
 
 function createDNSServer(ruleManager) {
-  const server = DNS.createServer({
+  const server = dns2.createServer({
     udp: true,
     tcp: true,
     handle: async (request, send) => {
@@ -24,20 +24,26 @@ function createDNSServer(ruleManager) {
 
         await ruleManager.logAccess(domain, 'BLOCKED');
       } else {
-        const resolver = new DNS.Resolver();
-        resolver.setServers([process.env.UPSTREAM_DNS || '8.8.8.8']);
-
         try {
-          const result = await resolver.resolveA(name);
-          result.forEach(ip => {
-            response.answers.push({
-              name,
-              type: Packet.TYPE.A,
-              class: Packet.CLASS.IN,
-              ttl: 300,
-              address: ip
-            });
+          const upstreamDNS = process.env.UPSTREAM_DNS || '8.8.8.8';
+
+          const resolver = new dns2.UDP({
+            nameServers: [upstreamDNS]
           });
+
+          const result = await resolver.resolveA(name);
+
+          if (result.answers) {
+            result.answers.forEach(answer => {
+              response.answers.push({
+                name,
+                type: Packet.TYPE.A,
+                class: Packet.CLASS.IN,
+                ttl: 300,
+                address: answer.address
+              });
+            });
+          }
 
           await ruleManager.logAccess(domain, 'ALLOWED');
         } catch (error) {
